@@ -6,53 +6,40 @@ import gitfive.config
 from gitfive.lib.objects import GitfiveRunner
 
 
-async def create_repo(runner: GitfiveRunner, repo_name: str):
-    data = {
-        "owner": runner.creds.username,
-        "template_repository_id": "",
-        "include_all_branches": "0",
-        "repository": {
-            "name": repo_name,
-            "visibility": "private",
-            "description": "",
-            "auto_init": "0",
-            "license_template": "",
-            "gitignore_template": ""
-        }
+def _api_headers(runner: GitfiveRunner):
+    return {
+        "Authorization": f"Bearer {runner.creds.token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28"
     }
 
-    # Adding some headers that are now required to create a repository
-    updated_headers = gitfive.config.headers
-    updated_headers["Github-Verified-Fetch"] = "true"
-    updated_headers["Origin"] = "https://github.com"
 
-    req = await runner.as_client.post("https://github.com/repositories", json=data, headers=updated_headers)
-    if req.status_code in [200, 302]:
+async def create_repo(runner: GitfiveRunner, repo_name: str):
+    """
+    Creates the temporary repository via the GitHub REST API.
+    The repo is public so its commit pages can be scraped without a
+    browser session (token-only workflow).
+    """
+    data = {
+        "name": repo_name,
+        "private": False,
+        "auto_init": False,
+        "description": ""
+    }
+
+    req = await runner.as_client.post("https://api.github.com/user/repos", json=data, headers=_api_headers(runner))
+    if req.status_code in [200, 201]:
         return True
     exit(f'Couldn\'t create repo "{repo_name}".\nResponse code : {req.status_code}\nResponse text : {req.text}')
 
 
 async def delete_repo(runner: GitfiveRunner, repo_name: str):
-    req = await runner.as_client.get(f"https://github.com/{runner.creds.username}/{repo_name}/settings")
-
-    body = BeautifulSoup(req.text, 'html.parser')
-    form = body.find('form', action=f'/{runner.creds.username}/{repo_name}/settings/delete')
-    if not form:
-        exit(f'Couldn\'t find the form to delete the repo "{repo_name}".')
-
-    authenticity_token = [x for x in form.find_all('input') if "name" in x.attrs and x.attrs["name"] == "authenticity_token"][0].attrs["value"]
-    form_data = {
-        "_method": "delete",
-        "authenticity_token": authenticity_token,
-        "repository": repo_name,
-        "sudo_referrer": f"https://github.com/{runner.creds.username}/{repo_name}/settings",
-        "user_id": runner.creds.username,
-        "verify": f"{runner.creds.username}/{repo_name}",
-        "sudo_password": runner.creds.password
-    }
-
-    req = await runner.as_client.post(f"https://github.com/{runner.creds.username}/{repo_name}/settings/delete", data=form_data)
-    if req.status_code in [200, 302]:
+    """
+    Deletes the temporary repository via the GitHub REST API.
+    Requires a token with the "delete_repo" scope.
+    """
+    req = await runner.as_client.delete(f"https://api.github.com/repos/{runner.creds.username}/{repo_name}", headers=_api_headers(runner))
+    if req.status_code == 204:
         return True
 
     exit(f'Couldn\'t delete repo "{repo_name}".\nResponse code : {req.status_code}\nResponse text : {req.text}')

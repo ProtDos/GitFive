@@ -25,10 +25,15 @@ def do_chunk(repo: Repo, genesis_hash: str, genesis_tree_hash: str, emails_chunk
     """
     new_indexes = {}
     for email in emails_chunk:
-        commit_hash = repo.git.commit_tree(genesis_tree_hash, '-m', f'Impersonating: {email}\r\n\r\nCo-authored-by: target <{email}>', '-p', genesis_hash)
+        # The spoofed email is set as the commit *author* (the committer stays
+        # the repo-scoped "gitfive_lock" identity). GitHub resolves the author
+        # email to its owning account, which the REST API then exposes as
+        # `author.login` when we list the commits.
+        with repo.git.custom_environment(GIT_AUTHOR_NAME="target", GIT_AUTHOR_EMAIL=email):
+            commit_hash = repo.git.commit_tree(genesis_tree_hash, '-m', f'Impersonating: {email}', '-p', genesis_hash)
 
         new_indexes[commit_hash] = email
-    
+
     return len(emails_chunk), new_indexes
 
 def do_chunk_merge(runner: GitfiveRunner, repo: Repo, genesis_tree_hash: str, all_commits: str, total=0):
@@ -125,7 +130,7 @@ async def start(runner: GitfiveRunner, emails: List[str]):
 
         # Checking if repo is created
         while True:
-            req = await runner.as_client.get(f"https://github.com/{runner.creds.username}/{temp_repo_name}/settings")
+            req = await runner.as_client.get(f"https://github.com/{runner.creds.username}/{temp_repo_name}")
             if req.status_code == 200:
                 break
             sleep(1)

@@ -6,8 +6,8 @@ def parse_args():
     parser = argparse.ArgumentParser('gitfive')
     subparsers = parser.add_subparsers(dest='command')
 
-    login_parser = subparsers.add_parser('login', help='Let GitFive authenticate to GitHub.')
-    login_parser.add_argument('--clean', action='store_true', help="Clear credentials and session local files.")
+    login_parser = subparsers.add_parser('login', help='Validate the GitHub token GitFive will use.')
+    login_parser.add_argument('--clean', action='store_true', help="Deprecated : GitFive is token-only and stores no local credentials.")
 
     user_parser = subparsers.add_parser('user', help='Track down a GitHub user by its username.')
     user_parser.add_argument(dest="username",

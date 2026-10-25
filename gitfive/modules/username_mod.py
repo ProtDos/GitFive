@@ -39,6 +39,26 @@ async def hunt(username: str, json_file="", runner: GitfiveRunner=None):
         await analyze_ext_contribs(runner)
     runner.tmprinter.clear()
 
+    runner.emit("profile", {
+        "username": runner.target.username,
+        "name": runner.target.name,
+        "id": runner.target.id,
+        "avatar_url": runner.target.avatar_url,
+        "is_default_avatar": runner.target.is_default_avatar,
+        "is_site_admin": runner.target.is_site_admin,
+        "is_hireable": runner.target.is_hireable,
+        "company": runner.target.company,
+        "blog": runner.target.blog,
+        "location": runner.target.location,
+        "bio": runner.target.bio,
+        "twitter": runner.target.twitter,
+        "nb_public_repos": runner.target.nb_public_repos,
+        "nb_followers": runner.target.nb_followers,
+        "nb_following": runner.target.nb_following,
+        "created_at": runner.target.created_at,
+        "updated_at": runner.target.updated_at,
+    })
+
     print("\n[Identifiers]")
     print(f"Username : {runner.target.username}")
     if runner.target.name:
@@ -101,6 +121,11 @@ async def hunt(username: str, json_file="", runner: GitfiveRunner=None):
     else:
         print("Nothing to show.")
 
+    runner.emit("external_contributions", {
+        "count": runner.target.nb_ext_contribs,
+        "emails": [x for x in runner.target.ext_contribs if not x.endswith("users.noreply.github.com")],
+    })
+
     print("\n[SSH public keys]")
     await get_ssh_keys(runner)
     if runner.target.ssh_keys:
@@ -110,6 +135,8 @@ async def hunt(username: str, json_file="", runner: GitfiveRunner=None):
     else:
         print("Nothing to show.")
 
+    runner.emit("ssh_keys", runner.target.ssh_keys)
+
     print("\n[Gists]")
     if not sum(list(gist_stats.values())):
         print("Nothing to show.")
@@ -117,6 +144,8 @@ async def hunt(username: str, json_file="", runner: GitfiveRunner=None):
         print(f"Gists : {gist_stats['gists']}")
     if gist_stats['starred']:
         print(f"Starred : {gist_stats['starred']}")
+
+    runner.emit("gists", gist_stats)
 
     # Emails generation
     if runner.target.company:
@@ -148,17 +177,26 @@ async def hunt(username: str, json_file="", runner: GitfiveRunner=None):
     await repos.get_list(runner)
     repos.show(runner)
 
+    runner.emit("repositories", {
+        "repos": runner.target.repos,
+        "languages_stats": runner.target.languages_stats,
+    })
+
     runner.rc.print("\n🎎 CLOSE FRIENDS\n", style="deep_pink2")
 
     # Close friends
     runner.target.potential_friends = await close_friends.guess(runner)
     close_friends.show(runner)
 
+    runner.emit("close_friends", runner.target.potential_friends)
+
     runner.rc.print("\n🏯 ORGANIZATIONS\n", style="plum2")
 
     # Organizations
     await organizations.scrape(runner)
     organizations.show(runner)
+
+    runner.emit("organizations", runner.target.orgs)
 
     if runner.target.orgs:
         print()
@@ -177,6 +215,13 @@ async def hunt(username: str, json_file="", runner: GitfiveRunner=None):
     runner.rc.print("\n🎭 IDENTITIES UNMASKING\n", style="red3")
     
     await xray.analyze(runner)
+
+    runner.emit("identities", {
+        "usernames": runner.target.usernames,
+        "fullnames": runner.target.fullnames,
+        "domains": runner.target.domains,
+        "internal_contribs": runner.target.internal_contribs,
+    })
 
     while True:
         emails = emails_gen.generate(runner, default_domains_list=config.emails_default_domains,
@@ -210,6 +255,14 @@ async def hunt(username: str, json_file="", runner: GitfiveRunner=None):
                 print(f"[+] New valid username : {handle}")
         if new_usernames:
             print()
+
+        runner.emit("emails", {
+            "generated": list(emails),
+            "registered": runner.target.registered_emails,
+            "confirmed_emails": runner.target.emails,
+            "usernames": runner.target.usernames,
+        })
+
         if {x.lower() for x in runner.target.usernames} == {x.lower() for x in runner.analyzed_usernames}:
             break # end iterations
         new_variations = xray.near_lookup(runner)

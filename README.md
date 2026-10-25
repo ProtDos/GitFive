@@ -51,7 +51,14 @@ $ pipx install gitfive
 It will automatically use venvs to avoid dependency conflicts with other projects.
 
 # Usage
-First, login to GitHub *(preferably with a secondary account)* :
+GitFive authenticates with a **GitHub personal access token** (scopes `repo` and `delete_repo`). No username/password or browser login is used.
+
+Provide the token in any of these ways (checked in this order):
+1. the `token` / `token_path` argument of the Python API (see below),
+2. the `GITHUB_TOKEN` environment variable,
+3. the token file `~/.github.token` (a bare token, or a `GITHUB_TOKEN=...` line).
+
+Check that your token works :
 ```bash
 $ gitfive login
 ```
@@ -79,6 +86,46 @@ options:
 
 ```bash
 $ gitfive user mxrch --json mxrch_data.json
+```
+
+# Use as a Python module
+
+GitFive can be imported and run programmatically. You get the data back as JSON,
+either synchronously (wait for the whole response) or asynchronously with
+streaming (each new finding is yielded as a chunk as soon as it is found).
+
+```python
+import gitfive
+
+# Synchronous — blocks and returns the full result as a dict
+data = gitfive.hunt("mxrch")                      # mode defaults to "user"
+```
+
+```python
+import asyncio
+import gitfive
+
+# Async — wait for the whole response
+data = asyncio.run(gitfive.hunt_async("mxrch"))
+
+# Async — stream each new piece of information as a JSON chunk
+async def run():
+    async for chunk in gitfive.stream("mxrch"):
+        print(chunk["type"], chunk["data"])
+        # chunk types: profile, external_contributions, ssh_keys, gists,
+        # repositories, close_friends, organizations, identities, emails,
+        # and a final "result" chunk (or an "error" chunk on failure).
+
+asyncio.run(run())
+```
+
+- **`mode`** — one of `"user"`, `"email"`, `"emails"`, `"light"`. For `"emails"`, `target` is the path to a file of email addresses (one per line).
+- **Token** — pass `token="ghp_..."` or `token_path="/path/to/token"`, otherwise `GITHUB_TOKEN` / `~/.github.token` are used.
+- The async entry points run GitFive's internal loop in a worker thread, so they can be awaited from either an **asyncio** or a **trio** event loop.
+
+```python
+# Override the token explicitly, pick a different mode
+data = gitfive.hunt("someone@example.com", mode="email", token="ghp_xxx")
 ```
 
 **Have fun 🥰💞**

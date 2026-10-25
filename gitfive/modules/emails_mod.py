@@ -24,6 +24,7 @@ async def hunt(emails_file: str, json_file="", target="", runner: GitfiveRunner 
     emails_accounts = await commits.scrape(runner, temp_repo_name, emails_index)
     if not emails_accounts:
         print("No email linked to a Github account !")
+    runner.emit("accounts", emails_accounts)
 
     # Delete
     runner.rc.print("\n[+] Deleted the remote repo", style="italic")
@@ -39,3 +40,5 @@ async def hunt(emails_file: str, json_file="", target="", runner: GitfiveRunner 
     runner.tmprinter.out("Deleting temp folder...")
     from gitfive.lib.utils import delete_tmp_dir; delete_tmp_dir()
     runner.tmprinter.clear()
+
+    return emails_accounts

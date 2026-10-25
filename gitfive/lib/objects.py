@@ -1,18 +1,23 @@
 from typing import *
 import json
-import base64
+import os
 from pathlib import Path
-from time import sleep
 from datetime import datetime
 
 from rich.console import Console
-from rich import print as rprint
 import httpx
-from bs4 import BeautifulSoup as bs
-from pwinput import pwinput
 import trio
 
 import gitfive.config as config
+
+
+def _json_default(o: object):
+    """Best-effort JSON serialization for streamed events."""
+    if isinstance(o, set):
+        return list(o)
+    if isinstance(o, datetime):
+        return f"{o.strftime('%Y/%m/%d %H:%M:%S')} (UTC)"
+    return str(o)
 
 
 class TMPrinter():
@@ -34,317 +39,110 @@ class TMPrinter():
 
 class Credentials():
     """
-        Manages GitHub authentication.
+        Manages GitHub authentication using a personal access token (PAT).
+
+        No username/password or browser-session login is used anymore:
+        the token is read from the GITHUB_TOKEN environment variable, or
+        from the token file (see config.token_path), and the account's
+        username is derived from the GitHub API.
     """
     def __init__(self):
-        cwd_path = Path().home()
-        gitfive_folder = cwd_path / ".malfrats/gitfive"
-        if not gitfive_folder.is_dir():
-            gitfive_folder.mkdir(parents=True, exist_ok=True)
-        self.creds_path = gitfive_folder / "creds.m"
-        self.session_path = gitfive_folder / "session.m"
-
         self.username = ""
-        self.password = ""
         self.token = ""
 
-        self.session: Dict[str, str] = {}
-
+        # Client used to scrape public github.com HTML pages.
+        # All scraped pages (profiles, repos, keys, the temporary public
+        # repo, etc.) are public, so no authentication is required here.
         self._as_client = httpx.AsyncClient(
-            # headers=config.headers, timeout=config.timeout, proxies="http://127.0.0.1:8282", verify=False
             headers=config.headers, timeout=config.timeout
         )
-        
-    def load_creds(self):
-        creds = self.parse(self.creds_path)
-        if creds:
-            self.username = creds["username"]
-            self.password = creds["password"]
-            self.token = creds["token"]
 
-        session = self.parse(self.session_path) # Cookies
-        if session:
-            self.session = session
-            self._as_client.cookies.update(self.session)
+    def load_token(self, token: str = None, token_path: str = None):
+        """
+            Resolves the GitHub token, in this order :
+              1. the `token` argument (if given),
+              2. a `token_path` file argument (if given),
+              3. the GITHUB_TOKEN environment variable,
+              4. the default token file (config.token_path).
+        """
+        if token:
+            self.token = token.strip()
+            return
 
-    def save_creds(self):
-        self.save(self.creds_path, {
-            "username": self.username,
-            "password": self.password,
-            "token": self.token
-        })
+        resolved = ""
+        if token_path:
+            p = Path(token_path).expanduser()
+            if not p.is_file():
+                exit(f"[-] Token file not found : {token_path}")
+            resolved = self._parse_token_file(p.read_text(encoding="utf-8"))
+        else:
+            resolved = os.environ.get("GITHUB_TOKEN", "").strip()
+            if not resolved:
+                p = Path(config.token_path).expanduser()
+                if p.is_file():
+                    resolved = self._parse_token_file(p.read_text(encoding="utf-8"))
+        if not resolved:
+            exit("[-] No GitHub token found.\n"
+                 "    Pass a token, set the GITHUB_TOKEN environment variable, or "
+                 f"save the token in {config.token_path}.")
+        self.token = resolved
 
-        self.save(self.session_path, self.session)
-
-    def parse(self, path: Path):
-        if not path.is_file():
-            return None
-
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                raw = f.read()
-            data = json.loads(base64.b64decode(raw).decode())
-            return data
-        except Exception:
-            return None
-
-    def save(self, path, data: Dict[str, str]):
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(base64.b64encode(json.dumps(data, indent=2).encode()).decode())
-
-    def are_creds_loaded(self) -> bool:
-        return all([self.username, self.password, self.token])
-
-    def prompt_creds(self):
-        while not self.username:
-            self.username = input("Username => ")
-        while not self.password:
-            self.password = pwinput("🔒 Password => ")
-        print('\nThe API token requires the "repo" and "delete_repo" scopes.')
-        rprint("[italic]See : https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token")
-        while not self.token:
-            self.token = pwinput("🔒 API Token => ")
-        print()
+    @staticmethod
+    def _parse_token_file(content: str) -> str:
+        """
+            Accepts either a bare token or an env-style file containing a
+            GITHUB_TOKEN=... line, and returns the token value.
+        """
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                if key.strip().upper() in ("GITHUB_TOKEN", "TOKEN"):
+                    return value.strip().strip('"').strip("'")
+            else:
+                return line.strip('"').strip("'")
+        return ""
 
     def check_token(self):
+        """
+            Validates the token against the GitHub API, derives the
+            authenticated username and checks for the required scopes.
+        """
         print("Checking API token validity...")
         headers = {"Authorization": f"Bearer {self.token}"}
         req = httpx.get("https://api.github.com/user", headers=headers)
         if req.status_code == 401:
             exit("[-] Token seems invalid.")
         if req.status_code != 200:
-            exit(f"[-] GitHub API is returning an unexpected status code ({req.status_code}). Is your token correct ?") # Shouldn't happend (🤞)
+            exit(f"[-] GitHub API is returning an unexpected status code ({req.status_code}). Is your token correct ?")
+
         data = json.loads(req.text)
-        token_owner: str = data["login"]
-        if token_owner.lower() != self.username.lower():
-            exit(f"[-] Token's owner ({token_owner}) doesn't match logged user ({self.username}). 🫥")
-        if (raw_scopes := req.headers.get("x-oauth-scopes")):
+        self.username = data["login"]
+
+        raw_scopes = req.headers.get("x-oauth-scopes")
+        if raw_scopes is not None:
             from gitfive.lib.utils import humanize_list
             requirements = {"repo", "delete_repo"}
-            scopes = [x.strip() for x in raw_scopes.split(",")]
-            required_scopes = set()
-            excessive_scopes = set()
-            for scope in scopes:
-                if scope in requirements:
-                    required_scopes.add(scope)
-                else:
-                    excessive_scopes.add(scope)
-            if requirements == required_scopes:
-                print(f"[+] Token valid ! (scopes : {humanize_list(required_scopes)})")
-            else:
-                exit(f"[-] Token does not have sufficient scopes. (current scopes : {humanize_list(scopes)})")
+            scopes = [x.strip() for x in raw_scopes.split(",") if x.strip()]
+            missing_scopes = requirements - set(scopes)
+            if missing_scopes:
+                exit(f"[-] Token is missing required scopes : {humanize_list(sorted(missing_scopes))} "
+                     f"(current scopes : {humanize_list(scopes) if scopes else 'none'}).")
+            print(f"[+] Token valid ! (scopes : {humanize_list(sorted(requirements))})")
 
+            excessive_scopes = set(scopes) - requirements
             if excessive_scopes:
-                print(f"[!] Your token has excessive scopes (scopes : {humanize_list(excessive_scopes)}).")
+                print(f"[!] Your token has excessive scopes (scopes : {humanize_list(sorted(excessive_scopes))}).")
                 print("These scopes are not needed by GitFive, so be sure to keep it secure, or generate a new one.")
-            
-            print()
-
         else:
-            exit("[-] Your token seems invalid.")
+            # Fine-grained tokens don't expose the x-oauth-scopes header.
+            print("[!] Couldn't read token scopes (fine-grained token?).")
+            print("    Make sure it can create and delete repositories, otherwise GitFive will fail.")
 
-    async def login(self, force=False):
-        """
-        To avoid login everytime, we save the cookie
-        user_session so we can check it later.
-        """
-        tmprinter = TMPrinter()
+        print(f"[+] Authenticated as {self.username} !\n")
 
-        if not force:
-            if self.are_creds_loaded():
-                print("[+] Credentials found !\n")
-            else:
-                print("[-] No saved credentials found\n")
-                self.prompt_creds()
-        else:
-            self.prompt_creds()
-
-        self.check_token()
-
-        req = await self._as_client.get("https://github.com/login")
-
-        body = bs(req.text, 'html.parser')
-        authenticity_token = body.find("form", {"action": "/session"}).find("input", {"name": "authenticity_token"}).attrs["value"]
-
-        data = {
-            "commit": "Sign+in",
-            "authenticity_token": authenticity_token,
-            "login": self.username,
-            "password": self.password
-        }
-
-        req = await self._as_client.post("https://github.com/session", data=data, follow_redirects=False)
-        if req.status_code == 302:
-            if req.cookies.get("logged_in") == "yes":
-                self.session = {
-                        "user_session": req.cookies["user_session"],
-                        "__Host-user_session_same_site": req.cookies["__Host-user_session_same_site"],
-                        "_device_id": self._as_client.cookies["_device_id"]
-                    }
-                self.save_creds()
-                print("[+] Logged in !")
-                rprint(f"[italic][+] Credentials saved in {self.creds_path}")
-                rprint(f"[italic][+] Session saved in {self.session_path}")
-            elif req.headers["location"] == "https://github.com/sessions/verified-device":
-                print("[*] Additional check")
-                self.session = {
-                        "_device_id": self._as_client.cookies["_device_id"]
-                    }
-                self.save_creds()   # We need to save the _device_id, otherwise, if user provide wrong OTP code,
-                                    # it exits and at next login, Github will say that the credentials are wrong,
-                                    # unless we provide the same device_id that initiated 2FA procedure.
-                req = await self._as_client.get("https://github.com/sessions/verified-device", follow_redirects=False)
-                body = bs(req.text, 'html.parser')
-                authenticity_token = body.find("form", {"action": "/sessions/verified-device"}).find("input", {"name": "authenticity_token"}).attrs["value"]
-                msg = body.find("div", {"id": "device-verification-prompt"}).text
-                rprint(f'[bold]🗨️ Github :[/bold] [italic]"{msg}"')
-                otp = pwinput("📱 Code => ")
-                data = {
-                    "authenticity_token": authenticity_token,
-                    "otp": otp
-                }
-                req = await self._as_client.post("https://github.com/sessions/verified-device", data=data)
-                if req.cookies.get("logged_in") == "yes":
-                    self.session = {
-                        "user_session": req.cookies["user_session"],
-                        "__Host-user_session_same_site": req.cookies["__Host-user_session_same_site"],
-                        "_device_id": self._as_client.cookies["_device_id"]
-                    }
-                    self.save_creds()
-                    print("\n[+] Logged in !")
-                    rprint(f"[italic][+] Credentials saved in {self.creds_path}")
-                    rprint(f"[italic][+] Session saved in {self.session_path}")
-                else:
-                    exit("\n[-] Wrong code, please retry.")
-            elif req.headers["location"] == "https://github.com/sessions/two-factor/app":
-                print("[*] Additional check (TOTP)")
-                self.session = {
-                        "_device_id": self._as_client.cookies["_device_id"]
-                    }
-                self.save_creds()   # We need to save the _device_id, otherwise, if user provide wrong OTP code,
-                                    # it exits and at next login, Github will say that the credentials are wrong,
-                                    # unless we provide the same device_id that initiated 2FA procedure.
-                req = await self._as_client.get("https://github.com/sessions/two-factor/app", follow_redirects=False)
-                body = bs(req.text, 'html.parser')
-                form = body.find("form", {"action": "/sessions/two-factor"})
-                authenticity_token = form.find("input", {"name": "authenticity_token"}).attrs["value"]
-                msg = form.find("div", {"class": "mt-3"}).text
-                rprint(f'[bold]🗨️ Github :[/bold] [italic]"{msg}"')
-                app_otp = pwinput("📱 Code => ")
-                data = {
-                    "authenticity_token": authenticity_token,
-                    "app_otp": app_otp
-                }
-                req = await self._as_client.post("https://github.com/sessions/two-factor", data=data)
-                if req.cookies.get("logged_in") == "yes":
-                    self.session = {
-                        "user_session": req.cookies["user_session"],
-                        "__Host-user_session_same_site": req.cookies["__Host-user_session_same_site"],
-                        "_device_id": self._as_client.cookies["_device_id"]
-                    }
-                    self.save_creds()
-                    print("\n[+] Logged in !")
-                    rprint(f"[italic][+] Credentials saved in {self.creds_path}")
-                    rprint(f"[italic][+] Session saved in {self.session_path}")
-                else:
-                    exit("\n[-] Wrong code, please retry.")
-            elif req.headers["location"].startswith("https://github.com/sessions/two-factor/mobile"):
-                print("[*] 2FA detected (Github App)")
-                self.session = {
-                        "_device_id": self._as_client.cookies["_device_id"]
-                    }
-                self.save_creds()   # We need to save the _device_id, otherwise, if user provide wrong OTP code,
-                                    # it exits and at next login, Github will say that the credentials are wrong,
-                                    # unless we provide the same device_id that initiated 2FA procedure.
-                req = await self._as_client.get("https://github.com/sessions/two-factor/mobile?auto=true", follow_redirects=False)
-                if req.status_code == 302:
-                    exit("[-] You're temporary limited, please wait a minute. Chill and relax ☕")
-                body = bs(req.text, 'html.parser')
-                authenticity_token = body.find("form", {"action": "/sessions/two-factor/mobile_poll"}).find("input", {"name": "authenticity_token"}).attrs["value"]
-                msg = body.find("p", {"data-target": "sudo-credential-options.githubMobileChallengeMessage"}).text.strip()
-                number = body.find("h3", {"data-target": "sudo-credential-options.githubMobileChallengeValue"}).text.strip()
-                rprint(f'[bold]🗨️ Github :[/bold] [italic]"{msg}"')
-                rprint(f"[bold]🎲 Digits : {number}\n")
-                tmprinter.out("Waiting for user confirmation...")
-
-                headers = {**self._as_client.headers, "X-Requested-With": "XMLHttpRequest"}
-                data = {"authenticity_token": authenticity_token}
-
-                while True:
-                    sleep(2)
-                    req = await self._as_client.post("https://github.com/sessions/two-factor/mobile_poll", headers=headers, data=data, follow_redirects=False)
-                    res = json.loads(req.text)
-                    match res["status"]:
-                        case 'STATUS_ACTIVE':
-                            pass # Waiting
-                        case 'STATUS_EXPIRED' :
-                            tmprinter.clear()
-                            exit("[-] 2FA expired.")
-                        case 'STATUS_NOT_FOUND':
-                            tmprinter.clear()
-                            exit("[-] Request rejected.")
-                        case 'STATUS_APPROVED':
-                            break
-                tmprinter.clear()
-                print("[+] Got confirmation !")
-
-                self.session = {
-                    "user_session": req.cookies["user_session"],
-                    "__Host-user_session_same_site": req.cookies["__Host-user_session_same_site"],
-                    "_device_id": self._as_client.cookies["_device_id"]
-                }
-                self.save_creds()
-                rprint(f"[italic][+] Credentials saved in {self.creds_path}")
-                rprint(f"[italic][+] Session saved in {self.session_path}")
-            elif req.headers["location"].startswith("https://github.com/sessions/two-factor"):
-                print("[*] 2FA")
-                self.session = {
-                        "_device_id": self._as_client.cookies["_device_id"]
-                    }
-                self.save_creds()   # We need to save the _device_id, otherwise, if user provide wrong OTP code,
-                                    # it exits and at next login, Github will say that the credentials are wrong,
-                                    # unless we provide the same device_id that initiated 2FA procedure.
-                req = await self._as_client.get("https://github.com/sessions/two-factor/app")
-                body = bs(req.text, 'html.parser')
-                authenticity_token = body.find("form", {"action": "/sessions/two-factor"}).find("input", {"name": "authenticity_token"}).attrs["value"]
-                msg = body.find("form", {"action": "/sessions/two-factor"}).find("div", {"class": "mt-3"}).text.strip().split("\n")[0]
-                rprint(f'[bold]🗨️ Github :[/bold] [italic]"{msg}"')
-                otp = pwinput("📱 Code => ")
-                data = {
-                    "authenticity_token": authenticity_token,
-                    "otp": otp
-                }
-                req = await self._as_client.post("https://github.com/sessions/two-factor", data=data)
-                if req.cookies.get("logged_in") == "yes":
-                    self.session = {
-                        "user_session": req.cookies["user_session"],
-                        "__Host-user_session_same_site": req.cookies["__Host-user_session_same_site"],
-                        "_device_id": self._as_client.cookies["_device_id"]
-                    }
-                    self.save_creds()
-                    print("\n[+] Logged in !")
-                    rprint(f"[italic][+] Credentials saved in {self.creds_path}")
-                    rprint(f"[italic][+] Session saved in {self.session_path}")
-                else:
-                    exit("\n[-] Wrong code, please retry.")
-            else:
-                exit("[-] Unrecognized security step.\nPlease try login in the browser, or with another account.")
-        else:
-            exit("[-] Login failed.\nVerify your credentials.")
-
-    async def check_session(self):
-
-        req = await self._as_client.get("https://github.com/settings/profile", follow_redirects=False)
-        return req.status_code == 200
-
-    async def check_and_login(self):
-        is_session_valid = await self.check_session()
-        if not is_session_valid:
-            print("[DEBUG] Cookies no more active, I re-login...")
-            await self.login()
-            print("[DEBUG] Cookies re-generated and valid !")
-        else:
-            print("[DEBUG] Cookies valid !")
 
 class TargetEncoder(json.JSONEncoder):
     """
@@ -480,12 +278,25 @@ class GitfiveRunner():
         self.spoofed_emails = set()
         self.analyzed_usernames = set()
 
-    async def login(self):
+        # Optional callback used by the programmatic API to stream structured
+        # events. When set, it receives dicts shaped as {"type": str, "data": any}.
+        self._emit: Callable[[Dict[str, any]], None] = None
+
+    def emit(self, event_type: str, data: any = None):
         """
-            Interacts with the Credentials class to automatically
-            login to GitHub and load API Interface.
+            Pushes a structured, JSON-serializable event to the registered
+            streaming callback (if any). No-op in the normal CLI flow.
+        """
+        if self._emit is None:
+            return
+        payload = json.loads(json.dumps(data, default=_json_default)) if data is not None else None
+        self._emit({"type": event_type, "data": payload})
+
+    async def login(self, token: str = None, token_path: str = None):
+        """
+            Loads the GitHub token, validates it and loads the API Interface.
         """
         from gitfive.lib.api import APIInterface
-        self.creds.load_creds()
-        await self.creds.check_and_login()
+        self.creds.load_token(token=token, token_path=token_path)
+        self.creds.check_token()
         self.api = APIInterface(self.creds)

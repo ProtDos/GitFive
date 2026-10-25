@@ -15,3 +15,6 @@ def main():
     show_version()
     print()
     parse_args()
+
+if __name__ == "__main__":
+    main()

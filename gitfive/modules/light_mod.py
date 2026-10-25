@@ -27,3 +27,7 @@ async def hunt(username: str, runner: GitfiveRunner=None):
     print(f'\nEmail{"s" if len(emails) > 1 else ""} found for user "{username}" :')
     for email in emails:
         print(f"- {email}")
+
+    emails = sorted(emails)
+    runner.emit("emails", {"username": username, "emails": emails})
+    return emails

@@ -22,3 +22,8 @@ email_common_domains_prefixes = ['me', 'hello', 'hey', 'salut', 'contact', 'emai
 local_names = ['root', 'system', 'user', 'system', 'administrator', 'administrator', 'kali', 'debian', 'ubuntu']
 
 local_tlds = ['local', 'lan', 'localdomain', 'localhost', '(none)']
+
+# Authentication
+# GitFive reads the GitHub personal access token from the GITHUB_TOKEN
+# environment variable, falling back to this file.
+token_path = "~/.github.token"
