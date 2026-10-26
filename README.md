@@ -122,6 +122,7 @@ asyncio.run(run())
 - **`mode`** — one of `"user"`, `"email"`, `"emails"`, `"light"`. For `"emails"`, `target` is the path to a file of email addresses (one per line).
 - **Token** — pass `token="ghp_..."` or `token_path="/path/to/token"`, otherwise `GITHUB_TOKEN` / `~/.github.token` are used.
 - The async entry points run GitFive's internal loop in a worker thread, so they can be awaited from either an **asyncio** or a **trio** event loop.
+- **Hunts are safe to run in parallel.** Each call uses its own isolated working directory (`~/.malfrats/gitfive/.tmp/<run-id>`) and only cleans up its own files, so concurrent hunts — e.g. across multiple `uvicorn` workers, or via `asyncio.gather(...)` — never delete each other's data.
 
 ```python
 # Override the token explicitly, pick a different mode

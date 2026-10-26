@@ -26,7 +26,7 @@ async def hunt(email: str, json_file="", runner: GitfiveRunner = None):
         print("[-] Email isn't linked to a GitHub account.")
         runner.emit("email_lookup", {"email": email, "found": False, "username": None})
         runner.tmprinter.out("Deleting temp folder...")
-        from gitfive.lib.utils import delete_tmp_dir; delete_tmp_dir()
+        runner.cleanup()
         runner.tmprinter.clear()
 
     # Delete

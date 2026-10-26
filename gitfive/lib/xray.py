@@ -187,12 +187,8 @@ def near_show(runner: GitfiveRunner):
             print("[-] No possible name variation found.\n")
 
 async def analyze(runner: GitfiveRunner):
-    cwd_path = Path().home()
-    gitfive_folder = cwd_path / ".malfrats/gitfive"
-    gitfive_folder.mkdir(parents=True, exist_ok=True)
-    
-    target_user_folder: Path = gitfive_folder / ".tmp" / runner.target.username
-    repos_folder = target_user_folder / "repos"
+    # Per-run working dir (unique to this runner) so parallel hunts don't clash.
+    repos_folder = runner.run_dir / "repos"
     repos_folder.mkdir(parents=True, exist_ok=True)
 
     with concurrent.futures.ProcessPoolExecutor() as executor:

@@ -282,5 +282,6 @@ async def hunt(username: str, json_file="", runner: GitfiveRunner=None):
         runner.rc.print(f"[+] JSON output wrote to {json_file} !", style="italic")
 
     runner.tmprinter.out("Deleting temp folder...")
-    from gitfive.lib.utils import delete_tmp_dir; delete_tmp_dir()
+
+    runner.cleanup()
     runner.tmprinter.clear()

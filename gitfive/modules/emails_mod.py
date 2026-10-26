@@ -38,7 +38,8 @@ async def hunt(emails_file: str, json_file="", target="", runner: GitfiveRunner 
         runner.rc.print(f"[+] JSON output wrote to {json_file} !", style="italic")
 
     runner.tmprinter.out("Deleting temp folder...")
-    from gitfive.lib.utils import delete_tmp_dir; delete_tmp_dir()
+
+    runner.cleanup()
     runner.tmprinter.clear()
 
     return emails_accounts

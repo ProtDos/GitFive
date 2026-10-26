@@ -65,16 +65,8 @@ async def start(runner: GitfiveRunner, emails: List[str]):
     runner.tmprinter.out("[METAMON] 🐙 Creating repo...")
     await github.create_repo(runner, temp_repo_name)
 
-    cwd_path = Path().home()
-    gitfive_folder = cwd_path / ".malfrats/gitfive"
-    gitfive_folder.mkdir(parents=True, exist_ok=True)
-    
-    if not runner.target.username:
-        temp_folder = "temp-"+uuid.uuid4().hex[:20]
-        target_user_folder: Path = gitfive_folder / ".tmp" / temp_folder
-    else:
-        target_user_folder: Path = gitfive_folder / ".tmp" / runner.target.username
-    fake_folder = (target_user_folder / "fake")
+    # Per-run working dir (unique to this runner) so parallel hunts don't clash.
+    fake_folder = runner.run_dir / "fake"
     fake_folder.mkdir(parents=True, exist_ok=True)
     repo_path = fake_folder / temp_repo_name
 

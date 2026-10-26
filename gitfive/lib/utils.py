@@ -169,17 +169,6 @@ async def get_ssh_keys(runner: GitfiveRunner):
     if lines:
         runner.target.ssh_keys.extend(lines.split("\n"))
 
-def delete_tmp_dir():
-    from shutil import rmtree
-    cwd_path = Path().home()
-    gitfive_folder = cwd_path / ".malfrats/gitfive"
-    gitfive_folder.mkdir(parents=True, exist_ok=True)
-    
-    target_user_folder: Path = gitfive_folder / ".tmp"
-
-    change_permissions(target_user_folder)
-    rmtree(target_user_folder)
-
 def unicode_patch(txt: str):
     bad_chars = {
         "é": "e",

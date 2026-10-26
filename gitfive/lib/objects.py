@@ -1,6 +1,7 @@
 from typing import *
 import json
 import os
+import uuid
 from pathlib import Path
 from datetime import datetime
 
@@ -258,7 +259,12 @@ class GitfiveRunner():
         self.target: Target = Target()
         self.as_client = self.creds._as_client
         self.api: APIInterface = None
-        
+
+        # Per-run working directory, unique to this runner, so multiple hunts
+        # can run in parallel without sharing (and deleting) each other's files.
+        self.run_id = uuid.uuid4().hex
+        self.run_dir: Path = Path.home() / ".malfrats" / "gitfive" / ".tmp" / self.run_id
+
         self.limiters: Dict[str, trio.CapacityLimiter] = {
             "pea_repos": trio.CapacityLimiter(10),
             "pea_repos_search": trio.CapacityLimiter(10),
@@ -281,6 +287,20 @@ class GitfiveRunner():
         # Optional callback used by the programmatic API to stream structured
         # events. When set, it receives dicts shaped as {"type": str, "data": any}.
         self._emit: Callable[[Dict[str, any]], None] = None
+
+    def cleanup(self):
+        """
+            Removes only THIS run's working directory, leaving concurrent
+            hunts' directories untouched.
+        """
+        from shutil import rmtree
+        from gitfive.lib.utils import change_permissions
+        if self.run_dir.is_dir():
+            try:
+                change_permissions(self.run_dir)
+            except Exception:
+                pass
+            rmtree(self.run_dir, ignore_errors=True)
 
     def emit(self, event_type: str, data: any = None):
         """
