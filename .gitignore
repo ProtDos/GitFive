@@ -8,3 +8,4 @@ dist/
 gitfive.egg-info/
 .venv/
 venv/
+example.py
